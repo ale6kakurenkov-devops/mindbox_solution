@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  labels:
+    app: web-app
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: web-app
+  strategy:
+    type: RollingUpdate
+    # Гарантируем, что всегда есть 4 работающих пода (ноль недоступных)
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  minReadySeconds: 15  # Под должен проработать минимум 15 сек без сбоев, чтобы считаться готовым к замене
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      # Распределяем поды по зонам для отказоустойчивости
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - web-app
+                topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: web-app
+          image: myregistry/web-app:v1.2.0
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m    # 0.1 CPU — соответствует среднему потреблению
+              memory: 128Mi
+            limits:
+              cpu: 500m    # Позволяем "всплеск" CPU при инициализации
+              memory: 128Mi # Память стабильна, лимит = запросу
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15  # Даем 15 сек на инициализацию
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20  # Позже readiness — не убиваем под на старте
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # При необходимости можно добавить startupProbe, если /health не готов сразу
+          # startupProbe:
+          #   httpGet:
+          #     path: /health
+          #     port: 8080
+          #   failureThreshold: 30  # до 5 минут
+          #   periodSeconds: 10
+
+---
+# Не включаем HorizontalPodAutoscaler, так как 4 пода уже покрывают пиковую нагрузку.
+# Если нагрузка станет более динамичной — можно включить.
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: web-app-hpa
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: web-app
+#   minReplicas: 4
+#   maxReplicas: 4
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 70
